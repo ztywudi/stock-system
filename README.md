@@ -150,11 +150,11 @@ inventory-system/
 ### 下载地址
 
 | 文件 | 下载链接 | 说明 |
-|------|------|------|
-| EXE 可执行文件 | [点击下载](https://c.wss.ink/f/k3q7hjousyt) | **v3 版**：批量操作 + 模板 + 数据安全 |
-| 源码 | [点击下载](https://c.wss.ink/f/k3q7yhu0lub) | Python 版 + Go 版源码 |
+|------|----------|------|
+| 📦 **EXE 可执行文件** | [GitHub Releases 下载](https://github.com/ztywudi/stock-system/releases/tag/v3.0) | **v3 版**：批量操作 + 模板 + 数据安全 |
+| 📂 **源码** | [GitHub Releases 下载](https://github.com/ztywudi/stock-system/releases/tag/v3.0) | Python 版 + Go 版完整源码 |
 
-> ⚠️ 链接有效期约 24 小时，过期请联系作者重新上传。
+> ✅ 通过 GitHub Releases 下载，稳定可靠，永不过期！
 
 ---
 
