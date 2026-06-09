@@ -140,3 +140,25 @@ async function apiImportAll(data) {
 async function apiClearAll() {
   return apiFetch('POST', '/clear');
 }
+
+/** ========== 模板相关（新增）========== */
+
+/** 获取所有模板 */
+async function apiGetTemplates() {
+  return apiFetch('GET', '/templates');
+}
+
+/** 创建模板 */
+async function apiAddTemplate(data) {
+  return apiFetch('POST', '/templates', data);
+}
+
+/** 更新模板 */
+async function apiPutTemplate(data) {
+  return apiFetch('PUT', '/templates', data);
+}
+
+/** 删除模板 */
+async function apiDeleteTemplate(id) {
+  return apiFetch('DELETE', '/templates?id=' + id);
+}

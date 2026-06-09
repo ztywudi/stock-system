@@ -1,17 +1,15 @@
 /**
  * ============================================================
- * 库存管理系统 - 主应用逻辑
+ * 库存管理系统 - 主应用逻辑 (v2.1)
  * ============================================================
- * 包含：页面路由、物品管理、分类管理、出入库、盘点、
- *       统计报表、导入导出、备份恢复、打印等功能
+ * 新增：批量出入库、模板管理、数据库安全功能
  */
 
 // =============================================================
 // 工具函数
 // =============================================================
 const Utils = {
-  /** 当前时间格式化 */
-  now() { return new Date().toISOString() },
+  now() { return new Date().toISOString(); },
   fmtDate(d) {
     if (!d) return '-';
     const dt = typeof d === 'string' ? new Date(d) : d;
@@ -22,13 +20,11 @@ const Utils = {
     const dt = typeof d === 'string' ? new Date(d) : d;
     return dt.toLocaleDateString('zh-CN');
   },
-  /** 生成单据编号 */
   genReceiptNo(type) {
     const p = type === 'in' ? 'IN' : 'OUT';
     const ts = Date.now().toString(36).toUpperCase();
     return `${p}-${ts}-${Math.random().toString(36).substr(2,4).toUpperCase()}`;
   },
-  /** Toast 通知 */
   toast(msg, type = 'success') {
     const c = document.getElementById('toastContainer');
     const t = document.createElement('div');
@@ -37,7 +33,6 @@ const Utils = {
     c.appendChild(t);
     setTimeout(() => { t.style.opacity = '0'; t.style.transition = 'opacity 0.3s'; setTimeout(() => t.remove(), 300); }, 2500);
   },
-  /** 打开模态框 */
   openModal(html) {
     document.getElementById('modalContent').innerHTML = html;
     document.getElementById('modalOverlay').classList.add('show');
@@ -45,7 +40,6 @@ const Utils = {
   closeModal() {
     document.getElementById('modalOverlay').classList.remove('show');
   },
-  /** 确认对话框 */
   async confirm(msg) {
     return new Promise(resolve => {
       const html = `
@@ -61,7 +55,6 @@ const Utils = {
       Utils.openModal(html);
     });
   },
-  /** 导出下载 */
   download(filename, content, mime = 'application/json') {
     const blob = new Blob([content], { type: mime + ';charset=utf-8' });
     const url = URL.createObjectURL(blob);
@@ -70,8 +63,7 @@ const Utils = {
     a.click();
     URL.revokeObjectURL(url);
   },
-  /** 读取上传文件 */
-  readUploadFile(file) {
+  async readUploadFile(file) {
     return new Promise((resolve, reject) => {
       const r = new FileReader();
       r.onload = e => resolve(e.target.result);
@@ -79,7 +71,6 @@ const Utils = {
       r.readAsText(file, 'UTF-8');
     });
   },
-  /** 数字格式化 */
   money(v) { return Number(v || 0).toFixed(2); },
   num(v) { return Number(v || 0); },
 };
@@ -91,7 +82,6 @@ const Auth = {
   currentUser: null,
   SESSION_KEY: 'inventory_user_session',
 
-  /** 初始化：检查 token 恢复登录状态 */
   async init() {
     const saved = localStorage.getItem(this.SESSION_KEY);
     const token = getToken();
@@ -101,13 +91,11 @@ const Auth = {
         return true;
       } catch(e) {}
     }
-    // 清除无效 token
     clearToken();
     localStorage.removeItem(this.SESSION_KEY);
     return false;
   },
 
-  /** 登录 */
   async login(username, password) {
     try {
       const user = await apiLogin(username, password);
@@ -119,7 +107,6 @@ const Auth = {
     }
   },
 
-  /** 登出 */
   logout() {
     this.currentUser = null;
     localStorage.removeItem(this.SESSION_KEY);
@@ -128,7 +115,6 @@ const Auth = {
     Pages.navigate('login');
   },
 
-  /** 权限检查 */
   can(action) {
     if (!this.currentUser) return false;
     const r = this.currentUser.role;
@@ -144,35 +130,27 @@ const Auth = {
     return false;
   },
 
-  /** 获取角色中文名 */
   roleName(r) {
     return { admin: '管理员', operator: '操作员', viewer: '只读用户' }[r] || r;
   },
 };
 
-// 移除前端 hashPassword，密码哈希由后端处理
-
 // =============================================================
 // 页面渲染器
 // =============================================================
 const Pages = {
-  /** 当前页面名 */
   current: 'dashboard',
+  _txnMode: 'single', // 'single' or 'batch'
 
-  /** 切换页面 */
   async navigate(page, skipAuthCheck) {
-    // 权限检查（login 页面不需要登录）
     if (page !== 'login' && !skipAuthCheck && !Auth.currentUser) {
       page = 'login';
     }
-    // 权限不足
     if (page !== 'login' && !Auth.can(page)) {
       Utils.toast('权限不足，无法访问此页面', 'error');
       return;
     }
-
     this.current = page;
-    // 高亮导航
     document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
     const navEl = document.querySelector(`.nav-item[data-page="${page}"]`);
     if (navEl) navEl.classList.add('active');
@@ -186,9 +164,9 @@ const Pages = {
     }
   },
 
-  // ==========================================================
+  // =========================================================
   // 登录页面
-  // ==========================================================
+  // =========================================================
   async login(el) {
     if (Auth.currentUser) return this.navigate('dashboard', true);
     el.innerHTML = `
@@ -227,6 +205,10 @@ const Pages = {
       errEl.style.display = 'block';
     }
   },
+
+  // =========================================================
+  // 工作台
+  // =========================================================
   async dashboard(el) {
     const items = await dbGetAll('items');
     const txns = await dbGetAll('transactions');
@@ -241,17 +223,15 @@ const Pages = {
       return td === new Date().toDateString();
     });
 
-    // 最近出入库
     const recent = [...txns].sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0,10);
     const itemMap = {};
     items.forEach(i => itemMap[i.id] = i);
 
-    // 库存预警
     const warnHtml = lowStock.length ? `
       <div class="table-wrap mt-16">
         <div class="table-header"><h3>⚠️ 库存预警（${lowStock.length} 项）</h3></div>
         <table><tr><th>名称</th><th>规格</th><th>当前数量</th><th>最低库存</th></tr>
-        ${lowStock.map(i => `<tr><td>${i.name}</td><td>${i.spec || '-'}</td><td class="diff-negative">${i.quantity}</td><td>${i.minQuantity||0}</td></tr>`).join('')}
+          ${lowStock.map(i => `<tr><td>${i.name}</td><td>${i.spec || '-'}</td><td class="diff-negative">${i.quantity}</td><td>${i.minQuantity||0}</td></tr>`).join('')}
         </table>
       </div>` : '';
 
@@ -294,9 +274,9 @@ const Pages = {
       </div>`;
   },
 
-  // ==========================================================
+  // =========================================================
   // 分类管理
-  // ==========================================================
+  // =========================================================
   async categories(el) {
     const cats = await dbGetAll('categories');
     const items = await dbGetAll('items');
@@ -363,9 +343,9 @@ const Pages = {
     Pages.navigate('categories');
   },
 
-  // ==========================================================
+  // =========================================================
   // 物品管理
-  // ==========================================================
+  // =========================================================
   async items(el) {
     const items = await dbGetAll('items');
     const cats = await dbGetAll('categories');
@@ -385,25 +365,26 @@ const Pages = {
           </div>
         </div>
         <div id="itemTableWrap">
-          ${items.length ? `<table>
-            <tr><th>ID</th><th>名称</th><th>规格型号</th><th>分类</th><th>单位</th><th>单价</th><th>库存</th><th>预警值</th><th>操作</th></tr>
-            ${items.map(i => {
+        ${items.length ? `<table>
+          <tr><th>ID</th><th>名称</th><th>规格型号</th><th>分类</th><th>单位</th><th>单价</th><th>库存</th><th>预警值</th><th>操作</th></tr>
+          ${items.map(i => {
               const warn = Utils.num(i.quantity) <= Utils.num(i.minQuantity) ? ' class="diff-negative"' : '';
               return `<tr class="item-row" data-name="${i.name}" data-spec="${i.spec||''}">
-              <td>${i.id}</td>
-              <td><strong>${i.name}</strong></td>
-              <td class="text-muted">${i.spec || '-'}</td>
-              <td>${catMap[i.categoryId] || '-'}</td>
-              <td>${i.unit || '-'}</td>
-              <td>¥${Utils.money(i.unitPrice)}</td>
-              <td${warn}>${Utils.num(i.quantity)}</td>
-              <td>${i.minQuantity || 0}</td>
-              <td>
-                ${Auth.can('items') ? `<button class="btn btn-sm" onclick="Pages.showItemForm(${i.id})">✏️</button>
-                <button class="btn btn-sm btn-danger" onclick="Pages.delItem(${i.id})">🗑️</button>` : '<span class="text-muted">-</span>'}
-              </td>
-            </tr>`}).join('')}
-          </table>` : `<div class="empty-state"><div class="icon">📋</div><p>还没有物品，点击上方按钮新增</p></div>`}
+                <td>${i.id}</td>
+                <td><strong>${i.name}</strong></td>
+                <td class="text-muted">${i.spec || '-'}</td>
+                <td>${catMap[i.categoryId] || '-'}</td>
+                <td>${i.unit || '-'}</td>
+                <td>¥${Utils.money(i.unitPrice)}</td>
+                <td${warn}>${Utils.num(i.quantity)}</td>
+                <td>${i.minQuantity || 0}</td>
+                <td>
+                  ${Auth.can('items') ? `<button class="btn btn-sm" onclick="Pages.showItemForm(${i.id})">✏️</button>
+                  <button class="btn btn-sm btn-danger" onclick="Pages.delItem(${i.id})">🗑️</button>` : '<span class="text-muted">-</span>'}
+                </td>
+              </tr>`;
+          }).join('')}
+        </table>` : `<div class="empty-state"><div class="icon">📋</div><p>还没有物品，点击上方按钮新增</p></div>`}
         </div>
       </div>`;
   },
@@ -477,20 +458,21 @@ const Pages = {
     Pages.navigate('items');
   },
 
-  // ==========================================================
-  // 入库管理
-  // ==========================================================
+  // =========================================================
+  // 入库管理（支持批量）
+  // =========================================================
   async in(el) { this._inOutForm(el, 'in'); },
 
-  // ==========================================================
-  // 出库管理
-  // ==========================================================
+  // =========================================================
+  // 出库管理（支持批量）
+  // =========================================================
   async out(el) { this._inOutForm(el, 'out'); },
 
   async _inOutForm(el, type) {
     const items = await dbGetAll('items');
     const label = type === 'in' ? '入库' : '出库';
     const icon = type === 'in' ? '📥' : '📤';
+    const isSingle = this._txnMode === 'single';
 
     // 最近记录
     const txns = (await dbGetByIndex('transactions', 'type', type)).sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0,20);
@@ -501,9 +483,19 @@ const Pages = {
         <h2>${icon} ${label}管理</h2>
         <div class="subtitle">${label}录入与记录</div>
       </div></div>
+
+      <!-- 模式切换 -->
       <div class="table-wrap mb-16">
-        <div class="table-header"><h3>${label}录入</h3></div>
-        <div style="padding:20px;">
+        <div class="table-header">
+          <h3>${label}录入</h3>
+          <div class="table-actions">
+            <button class="btn ${isSingle?'btn-primary':''}" onclick="Pages._switchTxnMode('${type}','single')">📋 单个录入</button>
+            <button class="btn ${!isSingle?'btn-primary':''}" onclick="Pages._switchTxnMode('${type}','batch')">📑 批量录入</button>
+          </div>
+        </div>
+
+        <!-- 单个录入 -->
+        <div style="padding:20px;display:${isSingle?'block':'none'}">
           <div class="form-row">
             <div class="form-group">
               <label>选择物品 *</label>
@@ -533,9 +525,33 @@ const Pages = {
           </div>
           <button class="btn btn-primary" onclick="Pages.submitTxn('${type}')">✅ 确认${label}</button>
         </div>
+
+        <!-- 批量录入 -->
+        <div style="padding:20px;display:${!isSingle?'block':'none'}">
+          <div class="form-row mb-16">
+            <div class="form-group">
+              <label>统一操作人（可选）</label>
+              <input class="form-control" id="batch_op" placeholder="留空则每行单独填写">
+            </div>
+            <div class="form-group">
+              <label>统一样注（可选）</label>
+              <input class="form-control" id="batch_remark" placeholder="留空则每行单独填写">
+            </div>
+          </div>
+          <div style="margin-bottom:12px;">
+            <button class="btn btn-sm btn-primary" onclick="Pages._addBatchRow('${type}')">+ 添加行</button>
+            <button class="btn btn-sm" onclick="Pages._loadBatchTemplate('${type}')" ${Auth.can('settings')?'':'disabled'} title="${Auth.can('settings')?'从模板加载':'仅管理员可管理模板'}">📥 从模板加载</button>
+            <span class="text-muted ml-8" id="batchCount">共 0 条</span>
+          </div>
+          <div id="batchRows" style="max-height:50vh;overflow-y:auto;"></div>
+          <div style="margin-top:12px;">
+            <button class="btn btn-primary" onclick="Pages.submitBatchTxn('${type}')">✅ 批量确认${label}</button>
+          </div>
+        </div>
       </div>
+
       <div class="table-wrap">
-        <div class="table-header"><h3>最近 ${label} 记录</h3></div>
+        <div class="table-header"><h3>最近 ${label}记录</h3></div>
         ${txns.length ? `<table>
           <tr><th>时间</th><th>物品</th><th>数量</th><th>单价</th><th>总金额</th><th>操作人</th><th>备注</th><th>打印</th></tr>
           ${txns.map(t => `<tr>
@@ -550,6 +566,153 @@ const Pages = {
           </tr>`).join('')}
         </table>` : `<div class="empty-state"><div class="icon">${icon}</div><p>暂无${label}记录</p></div>`}
       </div>`;
+
+    // 初始化一行
+    if (!isSingle) this._addBatchRow(type);
+  },
+
+  _switchTxnMode(type, mode) {
+    this._txnMode = mode;
+    this._inOutForm(document.getElementById('app'), type);
+  },
+
+  _addBatchRow(type) {
+    const items = []; // 同步获取
+    dbGetAll('items').then(items => {
+      const wrap = document.getElementById('batchRows');
+      if (!wrap) return;
+      const rowId = Date.now();
+      const options = items.length ? items.map(i => `<option value="${i.id}" data-price="${i.unitPrice}">${i.name} (${i.spec||'无规格'}) - 库存:${i.quantity}</option>`).join('')
+        : '<option>请先添加物品</option>';
+      const row = document.createElement('div');
+      row.className = 'form-row batch-row';
+      row.id = `batch_${rowId}`;
+      row.style.cssText = 'align-items:center;padding:8px 0;border-bottom:1px solid var(--border);';
+      row.innerHTML = `
+        <select style="flex:3;" onchange="Pages._onBatchItemChange(${rowId})">
+          <option value="">-- 选择物品 --</option>
+          ${options}
+        </select>
+        <input type="number" step="1" min="1" placeholder="数量" style="flex:1;width:80px;" id="bqty_${rowId}" oninput="Pages._calcBatchRowTotal(${rowId})">
+        <input type="number" step="0.01" placeholder="单价" style="flex:1;width:80px;" id="bpri_${rowId}">
+        <span style="flex:1;min-width:60px;" id="btotal_${rowId}">¥0.00</span>
+        <button class="btn btn-sm btn-danger" onclick="Pages._removeBatchRow(${rowId})">✕</button>`;
+      wrap.appendChild(row);
+      this._updateBatchCount();
+    });
+  },
+
+  _onBatchItemChange(rowId) {
+    const sel = document.querySelector(`#batch_${rowId} select`);
+    const priceInput = document.getElementById(`bpri_${rowId}`);
+    if (sel && sel.selectedOptions[0]) {
+      const price = sel.selectedOptions[0].dataset.price || 0;
+      priceInput.value = price;
+    }
+    this._calcBatchRowTotal(rowId);
+  },
+
+  _calcBatchRowTotal(rowId) {
+    const qty = parseFloat(document.getElementById(`bqty_${rowId}`).value) || 0;
+    const price = parseFloat(document.getElementById(`bpri_${rowId}`).value) || 0;
+    const totalEl = document.getElementById(`btotal_${rowId}`);
+    if (totalEl) totalEl.textContent = `¥${Utils.money(qty * price)}`;
+    this._updateBatchCount();
+  },
+
+  _removeBatchRow(rowId) {
+    const row = document.getElementById(`batch_${rowId}`);
+    if (row) row.remove();
+    this._updateBatchCount();
+  },
+
+  _updateBatchCount() {
+    const wrap = document.getElementById('batchRows');
+    const cnt = wrap ? wrap.querySelectorAll('.batch-row').length : 0;
+    const el = document.getElementById('batchCount');
+    if (el) el.textContent = `共 ${cnt} 条`;
+  },
+
+  async submitBatchTxn(type) {
+    const wrap = document.getElementById('batchRows');
+    if (!wrap) return;
+    const rows = wrap.querySelectorAll('.batch-row');
+    if (!rows.length) return Utils.toast('请至少添加一行', 'error');
+
+    const operator = document.getElementById('batch_op')?.value.trim() || '';
+    const remark = document.getElementById('batch_remark')?.value.trim() || '';
+    const items = await dbGetAll('items');
+    const itemMap = {}; items.forEach(i => itemMap[i.id] = i);
+
+    let successCount = 0;
+    for (const row of rows) {
+      const sel = row.querySelector('select');
+      const itemId = parseInt(sel?.value);
+      if (!itemId) continue;
+
+      const qty = parseInt(row.querySelector(`input[type="number"]`)?.value) || 0;
+      if (qty < 1) continue;
+
+      const price = parseFloat(row.querySelectorAll('input[type="number"]')[1]?.value) || (itemMap[itemId]?.unitPrice || 0);
+      const total = qty * price;
+
+      // 出库检查库存
+      if (type === 'out' && qty > (itemMap[itemId]?.quantity || 0)) {
+        Utils.toast(`${itemMap[itemId]?.name} 库存不足！`, 'error');
+        continue;
+      }
+
+      // 更新库存
+      if (itemMap[itemId]) {
+        itemMap[itemId].quantity = type === 'in'
+          ? Utils.num(itemMap[itemId].quantity) + qty
+          : Utils.num(itemMap[itemId].quantity) - qty;
+        itemMap[itemId].updatedAt = Utils.now();
+        await dbPut('items', itemMap[itemId]);
+      }
+
+      // 记录交易
+      await dbAdd('transactions', {
+        type, itemId, quantity: qty,
+        unitPrice: price, totalPrice: total,
+        operator: operator || remark || '',
+        remark: (operator && remark) ? `${operator} - ${remark}` : (operator || remark || ''),
+        createdAt: Utils.now()
+      });
+      successCount++;
+    }
+
+    if (successCount > 0) {
+      Utils.toast(`批量${type === 'in' ? '入库' : '出库'}成功！共 ${successCount} 条`);
+      const type2 = type;
+      Pages._inOutForm(document.getElementById('app'), type2);
+    }
+  },
+
+  async _loadBatchTemplate(type) {
+    const templates = await dbGetAll('templates');
+    const filtered = templates.filter(t => t.type === type);
+    if (!filtered.length) return Utils.toast('没有可用的模板', 'error');
+
+    // 简单取第一个匹配模板
+    const tpl = filtered[0];
+    if (!tpl.content) return;
+    const rows = JSON.parse(tpl.content);
+    const wrap = document.getElementById('batchRows');
+    if (!wrap) return;
+    wrap.innerHTML = '';
+    rows.forEach(r => {
+      this._addBatchRow(type);
+      const lastRow = wrap.lastElementChild;
+      if (lastRow) {
+        const sel = lastRow.querySelector('select');
+        if (sel) sel.value = r.itemId || '';
+        const qtyInput = lastRow.querySelector('input[type="number"]');
+        if (qtyInput) qtyInput.value = r.quantity || '';
+        this._onBatchItemChange(parseInt(lastRow.id.split('_')[1]));
+      }
+    });
+    Utils.toast(`已加载模板：${tpl.name}`);
   },
 
   async submitTxn(type) {
@@ -581,13 +744,12 @@ const Pages = {
     await dbPut('items', item);
 
     // 记录交易
-    const txn = {
+    await dbAdd('transactions', {
       type, itemId, quantity: qty,
       unitPrice, totalPrice,
       operator, remark,
       createdAt: Utils.now()
-    };
-    await dbAdd('transactions', txn);
+    });
 
     Utils.toast(`${type === 'in' ? '入库' : '出库'}成功！${item.name} x ${qty}`);
     // 清空表单
@@ -596,60 +758,12 @@ const Pages = {
     document.getElementById('txn_op').value = '';
     document.getElementById('txn_remark').value = '';
     // 刷新页面
-    Pages.navigate(type === 'in' ? 'in' : 'out');
+    Pages._inOutForm(document.getElementById('app'), type);
   },
 
-  // ==========================================================
-  // 出入库记录总览
-  // ==========================================================
-  async transactions(el) {
-    const txns = (await dbGetAll('transactions')).sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt));
-    const items = await dbGetAll('items');
-    const itemMap = {}; items.forEach(i => itemMap[i.id] = i);
-
-    el.innerHTML = `
-      <div class="page-header"><div>
-        <h2>📜 出入库记录</h2>
-        <div class="subtitle">全部历史记录，共 ${txns.length} 条</div>
-      </div></div>
-      <div class="table-wrap">
-        <div class="table-header">
-          <h3>全部记录</h3>
-          <div class="table-actions">
-            <input class="search-input" id="txnSearch" placeholder="🔍 搜索物品..." oninput="Pages.filterTxns()">
-          </div>
-        </div>
-        <div id="txnTableWrap">
-          ${txns.length ? `<table>
-            <tr><th>时间</th><th>类型</th><th>物品</th><th>数量</th><th>单价</th><th>总金额</th><th>操作人</th><th>备注</th><th>打印</th></tr>
-            ${txns.map(t => {
-              const iname = itemMap[t.itemId] ? itemMap[t.itemId].name : '(已删除)';
-              return `<tr class="txn-row" data-item="${iname}">
-              <td>${Utils.fmtDate(t.createdAt)}</td>
-              <td><span class="tag ${t.type === 'in' ? 'tag-in' : 'tag-out'}">${t.type === 'in' ? '入库' : '出库'}</span></td>
-              <td>${iname}</td>
-              <td>${t.quantity}</td>
-              <td>¥${Utils.money(t.unitPrice)}</td>
-              <td><strong>¥${Utils.money(t.totalPrice)}</strong></td>
-              <td>${t.operator || '-'}</td>
-              <td class="text-muted">${t.remark || '-'}</td>
-              <td><button class="btn btn-sm" onclick="Pages.printReceipt(${t.id})">🖨️</button></td>
-            </tr>`}).join('')}
-          </table>` : `<div class="empty-state"><div class="icon">📜</div><p>暂无记录</p></div>`}
-        </div>
-      </div>`;
-  },
-
-  filterTxns() {
-    const q = document.getElementById('txnSearch').value.toLowerCase();
-    document.querySelectorAll('.txn-row').forEach(row => {
-      row.style.display = row.dataset.item.toLowerCase().includes(q) ? '' : 'none';
-    });
-  },
-
-  // ==========================================================
+  // =========================================================
   // 打印单据
-  // ==========================================================
+  // =========================================================
   async printReceipt(txnId) {
     const txn = await dbGetById('transactions', txnId);
     if (!txn) return Utils.toast('记录不存在', 'error');
@@ -688,9 +802,58 @@ const Pages = {
     Utils.openModal(html);
   },
 
-  // ==========================================================
+  // =========================================================
+  // 出入库记录总览
+  // =========================================================
+  async transactions(el) {
+    const txns = (await dbGetAll('transactions')).sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt));
+    const items = await dbGetAll('items');
+    const itemMap = {}; items.forEach(i => itemMap[i.id] = i);
+
+    el.innerHTML = `
+      <div class="page-header"><div>
+        <h2>📜 出入库记录</h2>
+        <div class="subtitle">全部历史记录，共 ${txns.length} 条</div>
+      </div></div>
+      <div class="table-wrap">
+        <div class="table-header">
+          <h3>全部记录</h3>
+          <div class="table-actions">
+            <input class="search-input" id="txnSearch" placeholder="🔍 搜索物品..." oninput="Pages.filterTxns()">
+          </div>
+        </div>
+        <div id="txnTableWrap">
+        ${txns.length ? `<table>
+          <tr><th>时间</th><th>类型</th><th>物品</th><th>数量</th><th>单价</th><th>总金额</th><th>操作人</th><th>备注</th><th>打印</th></tr>
+          ${txns.map(t => {
+              const iname = itemMap[t.itemId] ? itemMap[t.itemId].name : '(已删除)';
+              return `<tr class="txn-row" data-item="${iname}">
+                <td>${Utils.fmtDate(t.createdAt)}</td>
+                <td><span class="tag ${t.type === 'in' ? 'tag-in' : 'tag-out'}">${t.type === 'in' ? '入库' : '出库'}</span></td>
+                <td>${iname}</td>
+                <td>${t.quantity}</td>
+                <td>¥${Utils.money(t.unitPrice)}</td>
+                <td><strong>¥${Utils.money(t.totalPrice)}</strong></td>
+                <td>${t.operator || '-'}</td>
+                <td class="text-muted">${t.remark || '-'}</td>
+                <td><button class="btn btn-sm" onclick="Pages.printReceipt(${t.id})">🖨️</button></td>
+              </tr>`;
+          }).join('')}
+        </table>` : `<div class="empty-state"><div class="icon">📜</div><p>暂无记录</p></div>`}
+        </div>
+      </div>`;
+  },
+
+  filterTxns() {
+    const q = document.getElementById('txnSearch').value.toLowerCase();
+    document.querySelectorAll('.txn-row').forEach(row => {
+      row.style.display = row.dataset.item.toLowerCase().includes(q) ? '' : 'none';
+    });
+  },
+
+  // =========================================================
   // 库存盘点
-  // ==========================================================
+  // =========================================================
   async check(el) {
     const checks = (await dbGetAll('checks')).sort((a,b) => new Date(b.checkDate) - new Date(a.checkDate));
     const items = await dbGetAll('items');
@@ -704,7 +867,7 @@ const Pages = {
         <div class="table-header"><h3>开始新盘点</h3></div>
         <div style="padding:20px;">
           <p class="mb-16 text-muted">创建一个新的盘点任务，逐一核对实际库存数量。</p>
-          ${Auth.can('items') ? `<button class="btn btn-primary" onclick="Pages.startCheck()">🆕 开始新盘点</button>` : '<span class="text-muted">只读用户无法创建盘点</span>'}
+          ${Auth.can('items') ? `<button class="btn btn-primary" onclick="Pages.startCheck()">🔍 开始新盘点</button>` : '<span class="text-muted">只读用户无法创建盘点</span>'}
         </div>
       </div>
       <div class="table-wrap">
@@ -712,14 +875,15 @@ const Pages = {
         ${checks.length ? `<table>
           <tr><th>盘点日期</th><th>盘点项数</th><th>差异项</th><th>状态</th><th>操作</th></tr>
           ${checks.map(c => {
-            const diffItems = (c.items || []).filter(it => it.diff !== 0);
-            return `<tr>
-              <td>${Utils.fmtDate(c.checkDate)}</td>
-              <td>${(c.items||[]).length}</td>
-              <td class="${diffItems.length ? 'diff-negative' : ''}">${diffItems.length}</td>
-              <td><span class="tag ${c.status === 'completed' ? 'tag-ok' : 'tag-warn'}">${c.status === 'completed' ? '已完成' : '草稿'}</span></td>
-              <td><button class="btn btn-sm" onclick="Pages.viewCheck(${c.id})">👁️ 查看</button></td>
-            </tr>`}).join('')}
+              const diffItems = (c.items || []).filter(it => it.diff !== 0);
+              return `<tr>
+                <td>${Utils.fmtDate(c.checkDate)}</td>
+                <td>${(c.items||[]).length}</td>
+                <td class="${diffItems.length ? 'diff-negative' : ''}">${diffItems.length}</td>
+                <td><span class="tag ${c.status === 'completed' ? 'tag-ok' : 'tag-warn'}">${c.status === 'completed' ? '已完成' : '草稿'}</span></td>
+                <td><button class="btn btn-sm" onclick="Pages.viewCheck(${c.id})">👁️ 查看</button></td>
+              </tr>`;
+          }).join('')}
         </table>` : `<div class="empty-state"><div class="icon">🔍</div><p>暂无盘点记录</p></div>`}
       </div>`;
   },
@@ -776,11 +940,10 @@ const Pages = {
     };
     await dbAdd('checks', check);
 
-    // 可选：同步库存（让用户选择是否要更新）
+    // 自动更新库存为实际数量
     const diffItems = checkItems.filter(c => c.diff !== 0);
     if (diffItems.length) {
-      // 自动更新库存为实际数量
-      for (const c of checkItems) {
+      for (const c of diffItems) {
         if (c.diff !== 0) {
           const item = items.find(i => i.id === c.itemId);
           if (item) {
@@ -813,9 +976,9 @@ const Pages = {
         <table>
           <tr><th>物品</th><th>账面</th><th>实际</th><th>差异</th></tr>
           ${(check.items||[]).map(c => {
-            const iname = itemMap[c.itemId] ? itemMap[c.itemId].name : '(已删除)';
-            const cls = c.diff > 0 ? 'diff-positive' : c.diff < 0 ? 'diff-negative' : '';
-            return `<tr><td>${iname}</td><td>${c.expectedQty}</td><td>${c.actualQty}</td><td class="${cls}">${c.diff > 0 ? '+' : ''}${c.diff}</td></tr>`;
+              const iname = itemMap[c.itemId] ? itemMap[c.itemId].name : '(已删除)';
+              const cls = c.diff > 0 ? 'diff-positive' : c.diff < 0 ? 'diff-negative' : '';
+              return `<tr><td>${iname}</td><td>${c.expectedQty}</td><td>${c.actualQty}</td><td class="${cls}">${c.diff > 0 ? '+' : ''}${c.diff}</td></tr>`;
           }).join('')}
         </table>
       </div>
@@ -825,9 +988,9 @@ const Pages = {
     Utils.openModal(html);
   },
 
-  // ==========================================================
+  // =========================================================
   // 统计报表
-  // ==========================================================
+  // =========================================================
   async stats(el) {
     const items = await dbGetAll('items');
     const cats = await dbGetAll('categories');
@@ -897,8 +1060,8 @@ const Pages = {
         <h3>按分类统计</h3>
         ${catKeys.length ? `<div class="bar-chart">
           ${catKeys.map(k => {
-            const pct = catStats[k].value / Math.max(...catKeys.map(kk => catStats[kk].value), 1) * 100;
-            return `<div class="bar-item"><div class="bar" style="height:${Math.max(pct, 2)}%;background:var(--primary)"></div><div class="bar-label">${k}</div></div>`;
+            const pct = catStats[k].value / Math.max(...catKeys.map(k2 => catStats[k2].value), 1) * 100;
+            return `<div class="bar-item"><div class="bar" style="height:${Math.max(pct,2)}%;background:var(--primary);"></div><div class="bar-label">${k}</div></div>`;
           }).join('')}
         </div>` : `<p class="text-muted">暂无数据</p>`}
         <div class="form-row-3 mt-16" style="text-align:center;">
@@ -919,7 +1082,7 @@ const Pages = {
             </div>`;
           }).join('')}
         </div>` : `<p class="text-muted">暂无数据</p>`}
-        <div class="mt-8 text-muted" style="font-size:12px;"><span style="color:var(--success)">■</span> 入库 &nbsp; <span style="color:var(--danger)">■</span> 出库</div>
+        <div class="mt-8 text-muted" style="font-size:12px;"><span style="color:var(--success);">■</span> 入库 &nbsp; <span style="color:var(--danger);">■</span> 出库</div>
       </div>
       <div class="chart-container">
         <h3>库存价值 TOP 10</h3>
@@ -933,9 +1096,9 @@ const Pages = {
       </div>`;
   },
 
-  // ==========================================================
-  // 导入/导出/备份
-  // ==========================================================
+  // =========================================================
+  // 导入/导出/备份 + 模板管理
+  // =========================================================
   async tools(el) {
     el.innerHTML = `
       <div class="page-header"><div>
@@ -948,31 +1111,135 @@ const Pages = {
           <div class="stat-value" style="font-size:16px;">导出为 JSON 文件</div>
           <div class="stat-change text-muted">备份全部数据到本地</div>
         </div>
-        <div class="stat-card green" style="cursor:pointer;${Auth.can('settings') ? '' : 'opacity:0.5;'}" onclick="${Auth.can('settings') ? 'Pages.importData()' : 'Utils.toast(\'仅管理员可导入数据\',\'error\')'}">
+        <div class="stat-card green" style="cursor:pointer;${Auth.can('settings')?'':'opacity:0.5;'}" onclick="${Auth.can('settings')?'Pages.importData()':'Utils.toast(\'仅管理员可导入数据\',\'error\')'}">
           <div class="stat-label">📥 导入数据</div>
           <div class="stat-value" style="font-size:16px;">从 JSON 文件导入</div>
-          <div class="stat-change text-muted">${Auth.can('settings') ? '恢复或迁移数据' : '🔒 仅管理员可用'}</div>
+          <div class="stat-change text-muted">${Auth.can('settings')?'恢复或迁移数据':'🔒 仅管理员可用'}</div>
         </div>
         <div class="stat-card amber" style="cursor:pointer;" onclick="Pages.exportCSV()">
           <div class="stat-label">📊 导出 CSV</div>
           <div class="stat-value" style="font-size:16px;">导出物品列表为 CSV</div>
           <div class="stat-change text-muted">可用 Excel 打开</div>
         </div>
-        <div class="stat-card red" style="cursor:pointer;${Auth.can('settings') ? '' : 'opacity:0.5;'}" onclick="${Auth.can('settings') ? 'Pages.clearAllData()' : 'Utils.toast(\'仅管理员可清空数据\',\'error\')'}">
+        <div class="stat-card red" style="cursor:pointer;${Auth.can('settings')?'':'opacity:0.5;'}" onclick="${Auth.can('settings')?'Pages.clearAllData()':'Utils.toast(\'仅管理员可清空数据\',\'error\')'}">
           <div class="stat-label">⚠️ 清空数据</div>
           <div class="stat-value" style="font-size:16px;">删除全部数据</div>
-          <div class="stat-change text-muted">${Auth.can('settings') ? '谨慎操作！不可恢复' : '🔒 仅管理员可用'}</div>
+          <div class="stat-change text-muted">${Auth.can('settings')?'谨慎操作！不可恢复':'🔒 仅管理员可用'}</div>
         </div>
       </div>
-      <div class="table-wrap">
+
+      <!-- 模板管理 -->
+      <div class="table-wrap mt-16">
+        <div class="table-header">
+          <h3>📋 出入库模板管理</h3>
+          <div class="table-actions">
+            ${Auth.can('settings') ? `<button class="btn btn-primary" onclick="Pages.showTemplateForm()">+ 新建模板</button>` : ''}
+          </div>
+        </div>
+        <div id="templateWrap"></div>
+      </div>
+
+      <div class="table-wrap mt-16">
         <div class="table-header"><h3>说明</h3></div>
         <div style="padding:20px;">
           <p><strong>📤 导出数据</strong>：将全部数据（物品、分类、出入库、盘点记录）导出为 JSON 文件。</p>
-          <p class="mt-8"><strong>📥 导入数据</strong>：从之前导出的 JSON 文件恢复数据。会覆盖当前数据。</p>
+          <p class="mt-8"><strong>📥 导入数据</strong>：从之前导出的 JSON 文件恢复数据。会覆盖当前数据库中的全部数据。</p>
           <p class="mt-8"><strong>📊 导出 CSV</strong>：将物品清单导出为 CSV 格式，可用 Excel / WPS 打开编辑，编辑后可再导入。</p>
-          <p class="mt-8"><strong>🔄 备份建议</strong>：定期导出 JSON 备份并存放到安全位置。</p>
+          <p class="mt-8"><strong>📋 模板管理</strong>：创建常用出入库模板，批量操作时可直接加载，提高效率。</p>
+          <p class="mt-8"><strong>🔒 数据安全</strong>：定期导出 JSON 备份并存放到安全位置。清除浏览器缓存<strong>不会</strong>影响数据！</p>
         </div>
       </div>`;
+
+    // 加载模板列表
+    this._renderTemplateList();
+  },
+
+  async _renderTemplateList() {
+    const wrap = document.getElementById('templateWrap');
+    if (!wrap) return;
+    const templates = await dbGetAll('templates');
+    if (!templates.length) {
+      wrap.innerHTML = '<div class="empty-state"><p>暂无模板，点击上方按钮新建</p></div>';
+      return;
+    }
+    wrap.innerHTML = `<table>
+      <tr><th>模板名称</th><th>类型</th><th>物品数</th><th>创建时间</th><th>操作</th></tr>
+      ${templates.map(t => `<tr>
+        <td><strong>${t.name}</strong></td>
+        <td><span class="tag ${t.type === 'in' ? 'tag-in' : 'tag-out'}">${t.type === 'in' ? '入库' : '出库'}</span></td>
+        <td>${(JSON.parse(t.content||'[]')).length}</td>
+        <td class="text-muted">${Utils.fmtShortDate(t.createdAt)}</td>
+        <td>
+          ${Auth.can('settings') ? `<button class="btn btn-sm" onclick="Pages.exportTemplate(${t.id})">📤 导出</button>
+          <button class="btn btn-sm" onclick="Pages.delTemplate(${t.id})">🗑️ 删除</button>` : '<span class="text-muted">-</span>'}
+        </td>
+      </tr>`).join('')}
+    </table>`;
+  },
+
+  async showTemplateForm(id) {
+    const tpl = id ? await dbGetById('templates', id) : {};
+    const title = id ? '编辑模板' : '新建模板';
+    const items = await dbGetAll('items');
+
+    // 构建模板内容编辑器（简单版：JSON 文本）
+    const html = `
+      <div class="modal-header"><h3>${title}</h3><button class="modal-close" onclick="Utils.closeModal()">&times;</button></div>
+      <input type="hidden" id="tpl_id" value="${id || ''}">
+      <div class="form-row">
+        <div class="form-group">
+          <label>模板名称 *</label>
+          <input class="form-control" id="tpl_name" value="${tpl.name || ''}" placeholder="例如：常用入库模板">
+        </div>
+        <div class="form-group">
+          <label>类型</label>
+          <select class="form-control" id="tpl_type">
+            <option value="in" ${tpl.type==='in'?'selected':''}>入库</option>
+            <option value="out" ${tpl.type==='out'?'selected':''}>出库</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>模板内容（JSON 格式，每行一个物品）</</label>
+        <textarea class="form-control" id="tpl_content" rows="8" placeholder='[{"itemId":1,"quantity":10},{"itemId":2,"quantity":5}]'>${tpl.content || ''}</textarea>
+        <div class="hint">格式：JSON 数组，每项包含 itemId 和 quantity 字段</div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" onclick="Utils.closeModal()">取消</button>
+        <button class="btn btn-primary" onclick="Pages.saveTemplate()">保存</button>
+      </div>`;
+    Utils.openModal(html);
+  },
+
+  async saveTemplate() {
+    const id = document.getElementById('tpl_id').value;
+    const name = document.getElementById('tpl_name').value.trim();
+    const type = document.getElementById('tpl_type').value;
+    const content = document.getElementById('tpl_content').value.trim();
+    if (!name) return Utils.toast('请输入模板名称', 'error');
+    if (!content) return Utils.toast('请输入模板内容', 'error');
+    try { JSON.parse(content); } catch(e) { return Utils.toast('JSON 格式错误：' + e.message, 'error'); }
+
+    const data = { name, type, content, updatedAt: Utils.now() };
+    if (id) { data.id = Number(id); await dbPut('templates', data); Utils.toast('模板已更新'); }
+    else { data.createdAt = Utils.now(); await dbAdd('templates', data); Utils.toast('模板已创建'); }
+    Utils.closeModal();
+    Pages._renderTemplateList();
+  },
+
+  async exportTemplate(id) {
+    const tpl = await dbGetById('templates', id);
+    if (!tpl) return Utils.toast('模板不存在', 'error');
+    Utils.download(`模板_${tpl.name}.json`, tpl.content, 'application/json');
+    Utils.toast('模板已导出');
+  },
+
+  async delTemplate(id) {
+    const ok = await Utils.confirm('确定删除此模板？');
+    if (!ok) return;
+    await dbDelete('templates', id);
+    Utils.toast('模板已删除');
+    Pages._renderTemplateList();
   },
 
   async exportData() {
@@ -1028,10 +1295,9 @@ const Pages = {
 
     // CSV 转义
     const esc = v => `"${String(v||'').replace(/"/g, '""')}"`;
-    const csv = [headers.map(esc).join(',')];
-    rows.forEach(r => csv.push(r.map(esc).join(',')));
+    const csv = [headers.map(esc).join(','), ...rows.map(r => r.map(esc).join(','))].join('\n');
 
-    Utils.download(`物品清单_${new Date().toLocaleDateString('zh-CN').replace(/\//g,'-')}.csv`, csv.join('\n'), 'text/csv');
+    Utils.download(`物品清单_${new Date().toLocaleDateString('zh-CN').replace(/\//g,'-')}.csv`, csv, 'text/csv');
     Utils.toast('CSV 已导出');
   },
 
@@ -1044,31 +1310,31 @@ const Pages = {
       await apiClearAll();
       Utils.toast('所有数据已清空');
     } catch(e) {
-      Utils.toast('清空失败: ' + e.message, 'error');
+      Utils.toast('清空失败：' + e.message, 'error');
     }
     Pages.navigate('dashboard');
   },
 
-  // ==========================================================
-  // 系统设置 / 预留接口
-  // ==========================================================
+  // =========================================================
+  // 系统设置 / 用户管理 / 数据库安全
+  // =========================================================
   async settings(el) {
     const items = await dbGetAll('items');
     const txns = await dbGetAll('transactions');
-    // 获取数据库存储信息
-    const estimateSize = items.length * 0.5 + txns.length * 0.3; // 粗略估算 KB
+    const estimateSize = items.length * 0.5 + txns.length * 0.3;
 
     el.innerHTML = `
       <div class="page-header"><div>
         <h2>⚙️ 系统设置</h2>
         <div class="subtitle">系统信息与用户管理</div>
       </div></div>
+
       <div class="table-wrap mb-16">
         <div class="table-header"><h3>系统信息</h3></div>
         <div style="padding:20px;">
           <div class="form-row-3">
-            <div><strong>系统版本</strong><br><span class="text-muted">v1.2 (服务器模式)</span></div>
-            <div><strong>数据引擎</strong><br><span class="text-muted">SQLite (文件存储)</span></div>
+            <div><strong>系统版本</strong><br><span class="text-muted">v2.1 (新增批量出入库、模板管理、数据库安全)</span></div>
+            <div><strong>数据引擎</strong><br><span class="text-muted">SQLite (Go版) / JSON (Python版)</span></div>
             <div><strong>数据量</strong><br><span class="text-muted">约 ${estimateSize.toFixed(1)} KB</span></div>
           </div>
           <div class="form-row-3 mt-16">
@@ -1079,8 +1345,28 @@ const Pages = {
         </div>
       </div>
 
-      <!-- 用户管理（管理员专用） -->
+      <!-- 数据库安全 -->
+      <div class="table-wrap mb-16">
+        <div class="table-header"><h3>🔒 数据库安全</h3></div>
+        <div style="padding:20px;">
+          <p class="text-muted mb-16">以下功能用于保护数据安全，防止误删或非法访问。</p>
+          <div class="form-row">
+            <div class="form-group">
+              <label>自动备份</label>
+              <button class="btn btn-sm" onclick="Pages._toggleAutoBackup()">📤 开启自动备份</button>
+              <div class="hint">每日自动导出 JSON 备份到下载文件夹</div>
+            </div>
+            <div class="form-group">
+              <label>数据完整性校验</label>
+              <button class="btn btn-sm" onclick="Pages._verifyData()">🔍 校验现在</button>
+              <div class="hint">检查数据引用完整性（如出入库记录对应的物品是否存在）</div>
+            </div>
+          </div>
+          <div id="verifyResult" class="mt-16"></div>
+        </div>
+      </div>
 
+      <!-- 用户管理（管理员专用） -->
       ${Auth.can('settings') ? `<div class="table-wrap mb-16">
         <div class="table-header">
           <h3>👥 用户管理</h3>
@@ -1091,61 +1377,67 @@ const Pages = {
         <div id="userManageWrap"></div>
       </div>` : ''}
 
-      <!-- 预留功能接口 -->
-
-      <div class="table-wrap mb-16">
-        <div class="table-header"><h3>🔌 预留扩展功能</h3></div>
-        <div style="padding:20px;">
-          <p class="text-muted mb-16">以下功能已预留接口和数据模型，后续可开发启用：</p>
-          <table>
-            <tr><th>功能</th><th>说明</th><th>数据结构</th><th>状态</th></tr>
-            <tr>
-              <td>🔐 账号密码登录</td>
-              <td>多用户登录、权限管理</td>
-              <td><code>users</code> 表中已实现</td>
-              <td><span class="tag tag-ok">已实现</span></td>
-            </tr>
-            <tr>
-              <td>📋 模板管理</td>
-              <td>出/入库单模板、打印格式自定义</td>
-              <td><code>templates</code> 表已创建</td>
-              <td><span class="tag tag-warn">待开发</span></td>
-            </tr>
-            <tr>
-              <td>📱 扫码录入</td>
-              <td>扫描条形码/二维码快速录入</td>
-              <td>可扩展 items 字段</td>
-              <td><span class="tag tag-warn">待开发</span></td>
-            </tr>
-            <tr>
-              <td>📊 高级报表</td>
-              <td>图表可视化、月度/季度报表导出</td>
-              <td>基于现有数据</td>
-              <td><span class="tag tag-warn">待开发</span></td>
-            </tr>
-            <tr>
-              <td>🔄 多仓库管理</td>
-              <td>支持多个仓库独立管理</td>
-              <td>可新建 warehouses 表</td>
-              <td><span class="tag tag-warn">待开发</span></td>
-            </tr>
-          </table>
-        </div>
-      </div>
-
+      <!-- 快速使用说明 -->
       <div class="table-wrap">
         <div class="table-header"><h3>📖 快速使用说明</h3></div>
         <div style="padding:20px;line-height:2;">
           <p>1️⃣ <strong>先建分类</strong> → 进入「分类管理」新增分类（如：电子元器件、办公用品）</p>
           <p>2️⃣ <strong>再建物品</strong> → 进入「物品管理」添加具体的物品（名称、规格、单价等）</p>
-          <p>3️⃣ <strong>出入库操作</strong> → 在「入库管理」或「出库管理」中选择物品录入</p>
+          <p>3️⃣ <strong>出入库操作</strong> → 在「入库管理」或「出库管理」中选择物品录入（支持批量！）</p>
           <p>4️⃣ <strong>定期盘点</strong> → 进入「库存盘点」核对实际库存，差异会自动修正</p>
           <p>5️⃣ <strong>数据安全</strong> → 定期在「导入/导出/备份」中导出 JSON 备份</p>
-          <p>6️⃣ <strong>局域网访问</strong> → 双击 <code>start.bat</code>，同一局域网的设备即可访问</p>
+          <p>6️⃣ <strong>模板管理</strong> → 在「导入/导出/备份」中创建常用出入库模板，提高效率</p>
         </div>
       </div>`;
+
     // 加载用户列表
     if (Auth.can('settings')) this._renderUserList();
+  },
+
+  /** 数据完整性校验 */
+  async _verifyData() {
+    const items = await dbGetAll('items');
+    const txns = await dbGetAll('transactions');
+    const users = await dbGetAll('users');
+    const itemIds = new Set(items.map(i => i.id));
+
+    const orphanTxns = txns.filter(t => !itemIds.has(t.itemId));
+    const resultEl = document.getElementById('verifyResult');
+
+    if (!orphanTxns.length) {
+      resultEl.innerHTML = '<div style="color:var(--success);padding:8px;background:var(--card-bg);border-radius:8px;">✅ 数据完整性校验通过！没有发现孤立记录。</div>';
+    } else {
+      resultEl.innerHTML = `<div style="color:var(--warning);padding:8px;background:var(--card-bg);border-radius:8px;">
+        ⚠️ 发现 ${orphanTxns.length} 条出入库记录引用的物品已删除。
+        <button class="btn btn-sm" onclick="Pages._cleanOrphanTxns()">🗑️ 清理孤立记录</button>
+      </div>`;
+    }
+  },
+
+  async _cleanOrphanTxns() {
+    const ok = await Utils.confirm('确定清理所有孤立的出入库记录？（此操作不可恢复）');
+    if (!ok) return;
+    const items = await dbGetAll('items');
+    const itemIds = new Set(items.map(i => i.id));
+    const txns = await dbGetAll('transactions');
+    const validTxns = txns.filter(t => itemIds.has(t.itemId));
+    // 重建 transactions 表
+    await apiImportAll({ transactions: validTxns });
+    Utils.toast(`已清理 ${txns.length - validTxns.length} 条孤立记录`);
+    this._verifyData();
+  },
+
+  _toggleAutoBackup() {
+    const enabled = localStorage.getItem('autoBackup') === 'true';
+    if (enabled) {
+      localStorage.removeItem('autoBackup');
+      Utils.toast('自动备份已关闭');
+    } else {
+      localStorage.setItem('autoBackup', 'true');
+      Utils.toast('自动备份已开启（每日首次登录时执行）');
+      // 立即执行一次
+      this.exportData();
+    }
   },
 
   /** 渲染用户列表 */
@@ -1166,15 +1458,14 @@ const Pages = {
         <td><span class="tag ${u.role === 'admin' ? 'tag-in' : u.role === 'operator' ? 'tag-warn' : ''}">${Auth.roleName(u.role)}</span></td>
         <td class="text-muted">${Utils.fmtDate(u.createdAt)}</td>
         <td>
-          <button class="btn btn-sm" onclick="Pages.showUserForm(${u.id})">✏️</button>
+          <button class="btn btn-sm" onclick="Pages.showUserForm(${u.id})">✏️ 编辑</button>
           <button class="btn btn-sm btn-warning" onclick="Pages.resetUserPwd(${u.id})">🔑 重置密码</button>
-          ${u.username !== 'admin' ? `<button class="btn btn-sm btn-danger" onclick="Pages.delUser(${u.id})">🗑️</button>` : ''}
+          ${u.username !== 'admin' ? `<button class="btn btn-sm btn-danger" onclick="Pages.delUser(${u.id})">🗑️ 删除</button>` : ''}
         </td>
       </tr>`).join('')}
     </table>`;
   },
 
-  /** 用户表单 */
   async showUserForm(id) {
     const user = id ? await dbGetById('users', id) : {};
     const title = id ? '编辑用户' : '新增用户';
@@ -1297,36 +1588,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   // 更新侧边栏用户状态
   updateSidebarUser();
 
-  // 启动：未登录跳转登录页，已登录进工作台
-  if (Auth.currentUser) {
-    Pages.navigate('dashboard', true);
-  } else {
-    Pages.navigate('login', true);
+  // 自动备份检查
+  if (localStorage.getItem('autoBackup') === 'true') {
+    const lastBackup = localStorage.getItem('lastBackupDate');
+    const today = new Date().toLocaleDateString();
+    if (lastBackup !== today) {
+      localStorage.setItem('lastBackupDate', today);
+      // 延迟执行，避免影响启动速度
+      setTimeout(() => Pages.exportData(), 3000);
+    }
   }
 });
-
-/** 更新侧边栏用户信息和导航权限 */
-function updateSidebarUser() {
-  const footer = document.querySelector('.sidebar-footer');
-  if (!footer) return;
-
-  // 根据当前用户权限显示/隐藏导航项
-  document.querySelectorAll('.nav-item').forEach(el => {
-    const page = el.dataset.page;
-    el.style.display = Auth.currentUser && Auth.can(page) ? '' : 'none';
-  });
-
-  if (Auth.currentUser) {
-    footer.innerHTML = `
-      <div style="display:flex;align-items:center;justify-content:space-between;">
-        <span>👤 ${Auth.currentUser.displayName || Auth.currentUser.username}<br><small style="color:var(--text-secondary);">${Auth.roleName(Auth.currentUser.role)}</small></span>
-        <button class="btn btn-sm" onclick="Auth.logout()" title="退出登录">🚪</button>
-      </div>`;
-  } else {
-    footer.innerHTML = `v1.0 &nbsp;|&nbsp; 未登录`;
-    // 未登录时只显示仪表盘导航（指向登录页）
-    document.querySelectorAll('.nav-item').forEach(el => {
-      el.style.display = el.dataset.page === 'dashboard' ? '' : 'none';
-    });
-  }
-}
